@@ -127,7 +127,7 @@ fn validate_jwt(token: &str) -> Result<Claims, JwtError> {
 pub async fn get_articles(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Articles>>, String> {
-    let res = sqlx::query_as::<_, Articles>("SELECT * FROM \"Articles\"")
+    let res = sqlx::query_as::<_, Articles>(r#"SELECT * FROM "Articles""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -139,7 +139,7 @@ pub async fn get_articles(
 pub async fn get_cities(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Cities>>, String> {
-    let res = sqlx::query_as::<_, Cities>("SELECT * FROM \"Cities\"")
+    let res = sqlx::query_as::<_, Cities>(r#"SELECT * FROM "Cities""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -151,7 +151,7 @@ pub async fn get_cities(
 pub async fn get_deals(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Deals>>, String> {
-    let res = sqlx::query_as::<_, Deals>("SELECT * FROM \"Deals\"")
+    let res = sqlx::query_as::<_, Deals>(r#"SELECT * FROM "Deals""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -163,7 +163,7 @@ pub async fn get_deals(
 pub async fn get_photos(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Photos>>, String> {
-    let res = sqlx::query_as::<_, Photos>("SELECT * FROM \"Photos\"")
+    let res = sqlx::query_as::<_, Photos>(r#"SELECT * FROM "Photos""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -176,7 +176,7 @@ pub async fn get_photos(
 pub async fn get_shops(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Shops>>, String> {
-    let res = sqlx::query_as::<_, Shops>("SELECT * FROM \"Shops\"")
+    let res = sqlx::query_as::<_, Shops>(r#"SELECT * FROM "Shops""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -188,11 +188,39 @@ pub async fn get_shops(
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Users>>, String> {
-    let res = sqlx::query_as::<_, Users>("SELECT * FROM \"Users\"")
+    let res = sqlx::query_as::<_, Users>(r#"SELECT * FROM "Users""#)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
         .map_err(|e| e.to_string());
 
     res
+}
+
+pub async fn post_users(extract::State(pool): extract::State<PgPool>,
+                          axum::Json(payload): axum::Json<Users>,
+) -> Result<axum::Json<String>, http::StatusCode> {
+    let user = Users::new(payload.id, payload.email, payload.phone, payload.cityid, payload.date_registered);
+
+    let res = sqlx::query(
+        r#"
+        INSERT INTO "Users" (id, email, phone, cityid, date_registered)
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+        .bind(&user.id)
+        .bind(&user.email)
+        .bind(&user.phone)
+        .bind(&user.cityid)
+        .bind(&user.date_registered)
+        .execute(&pool)
+        .await;
+
+    match res {
+        Ok(result) => {
+            let rows = result.rows_affected();
+            Ok(axum::Json(format!("{} row(s) affected", rows)))
+        },
+        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }

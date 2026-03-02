@@ -34,7 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/deals", get(handlers::get_deals))
         .route("/photos", get(handlers::get_photos))
         .route("/shops", get(handlers::get_shops))
-        //.route("/users", get(handlers::get_users))
+        .route("/users", get(handlers::get_users))
+        .route("/users", post(handlers::post_users))
 
 /*        .route("/users_conversations/{id}", get(handlers::get_users_conversations))
         .route("/users/{id}", get(handlers::get_user_by_id))
