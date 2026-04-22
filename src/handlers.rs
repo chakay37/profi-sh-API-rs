@@ -3,7 +3,7 @@ use axum::extract::path::ErrorKind::Message;
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey, errors::Error as JwtError};
 use sqlx::{FromRow, PgPool};
-use chrono::{Utc, Duration};
+use chrono::{Utc, Duration, DateTime};
 use bcrypt::{verify, hash};
 use hyper::StatusCode;
 use sqlx::types::Text;
@@ -29,6 +29,7 @@ pub struct Deals {
     shopId: i32,
     enddate: chrono::NaiveDate,
     value: String,
+    r#type: i32,
     text: String,
     priority: i16
 }
@@ -78,6 +79,7 @@ pub struct DealsW {
     shopId: i32,
     enddate: chrono::NaiveDate,
     value: String,
+    r#type: i32,
     text: String,
     priority: i16
 }
@@ -124,8 +126,8 @@ impl Cities {
     }
 }
 impl Deals {
-    pub fn new(id: i32, date: chrono::NaiveDate, shopId: i32, enddate: chrono::NaiveDate, value: String, text: String, priority: i16) -> Deals {
-        Self { id, date, shopId, enddate, value, text, priority }
+    pub fn new(id: i32, date: chrono::NaiveDate, shopId: i32, enddate: chrono::NaiveDate, value: String, r#type: i32, text: String, priority: i16) -> Deals {
+        Self { id, date, shopId, enddate, value, r#type, text, priority }
     }
 }
 impl Photos {
@@ -156,8 +158,8 @@ impl CitiesW {
     }
 }
 impl DealsW {
-    pub fn new(date: chrono::NaiveDate, shopId: i32, enddate: chrono::NaiveDate, value: String, text: String, priority: i16) -> DealsW {
-        Self { date, shopId, enddate, value, text, priority }
+    pub fn new(date: chrono::NaiveDate, shopId: i32, enddate: chrono::NaiveDate, value: String, r#type: i32, text: String, priority: i16) -> DealsW {
+        Self { date, shopId, enddate, value, r#type, text, priority }
     }
 }
 impl PhotosW {
@@ -228,7 +230,10 @@ pub async fn get_cities(
 pub async fn get_deals(
     extract::State(pool): extract::State<PgPool>
 ) -> Result<axum::Json<Vec<Deals>>, String> {
-    let res = sqlx::query_as::<_, Deals>(r#"SELECT * FROM "Deals""#)
+    let last30days = Utc::now().naive_utc() - chrono::Duration::days(60);
+
+    let res = sqlx::query_as::<_, Deals>(r#"SELECT * FROM "Deals" WHERE enddate > $1 ORDER BY enddate"#)
+        .bind(last30days)
         .fetch_all(&pool)
         .await
         .map(axum::Json)
@@ -359,50 +364,58 @@ pub async fn get_users_id(
     res
 }
 pub async fn post_users(extract::State(pool): extract::State<PgPool>,
-                          axum::Json(payload): axum::Json<Users>,
-) -> Result<axum::Json<String>, http::StatusCode> {
-    let user = Users::new(payload.id, payload.email, payload.phone, payload.cityid, payload.date_registered);
+                          axum::Json(payload): axum::Json<UsersW>,
+) -> Result<axum::Json<serde_json::Value>, axum::Json<serde_json::Value>> {
+    let user = UsersW::new(payload.email, payload.phone, payload.cityid, payload.date_registered);
 
     let res = sqlx::query(
         r#"
-        INSERT INTO "Users" (id, email, phone, cityid, date_registered)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO "Users" (email, phone, cityid)
+        VALUES ($1, $2, $3)
         "#,
     )
-        .bind(&user.id)
         .bind(&user.email)
         .bind(&user.phone)
         .bind(&user.cityid)
-        .bind(&user.date_registered)
         .execute(&pool)
         .await;
 
-    match res {
-        Ok(result) => {
-            let rows = result.rows_affected();
-            Ok(axum::Json(format!("{} row(s) affected", rows)))
-        },
-        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+        match res {
+            Ok(result) => {
+                Ok(axum::Json(serde_json::json!({
+                "success": true,
+                "rows_affected": result.rows_affected()
+                })))
+            }
+            Err(err) => {
+                eprintln!("DB error: {:?}", err);
+
+                Err(axum::Json(serde_json::json!({
+                "success": false,
+                "error": "Database operation failed"
+            })))
+            }
+        }
     }
-}
+
 
 pub async fn post_deals(extract::State(pool): extract::State<PgPool>,
-                        axum::Json(payload): axum::Json<Deals>,
-) -> Result<axum::Json<String>, http::StatusCode> {
+                        axum::Json(payload): axum::Json<DealsW>,
+) -> Result<axum::Json<serde_json::Value>, axum::Json<serde_json::Value>> {
 
-    let deal = Deals::new(payload.id, payload.date, payload.shopId, payload.enddate, payload.value, payload.text, payload.priority);
+    let deal = DealsW::new(payload.date, payload.shopId, payload.enddate, payload.value, payload.r#type, payload.text, payload.priority);
 
     let res = sqlx::query(
         r#"
-        INSERT INTO "Deals" (id, date, "shopId", enddate, value, text, priority)
+        INSERT INTO "Deals" (date, "shopId", enddate, value, type, text, priority)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
-        .bind(&deal.id)
         .bind(&deal.date)
         .bind(&deal.shopId)
         .bind(&deal.enddate)
         .bind(&deal.value)
+        .bind(&deal.r#type)
         .bind(&deal.text)
         .bind(&deal.priority)
         .execute(&pool)
@@ -410,51 +423,65 @@ pub async fn post_deals(extract::State(pool): extract::State<PgPool>,
 
     match res {
         Ok(result) => {
-            let rows = result.rows_affected();
-            Ok(axum::Json(format!("{} row(s) affected", rows)))
-        },
-        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
-    }
+            Ok(axum::Json(serde_json::json!({
+            "success": true,
+            "rows_affected": result.rows_affected()
+            })))
+        }
+        Err(err) => {
+            eprintln!("DB error: {:?}", err);
 
+            Err(axum::Json(serde_json::json!({
+            "success": false,
+            "error": "Database operation failed"
+        })))
+        }
+    }
 }
 
 pub async fn put_photos(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(id): extract::Path<i32>,
     axum::Json(payload): axum::Json<PhotosW>,
-) -> Result<axum::Json<String>, http::StatusCode> {
+) -> Result<axum::Json<serde_json::Value>, axum::Json<serde_json::Value>> {
 
-    let photo = PhotosW::new(payload.desc, payload.name, payload.url);
+    let photo = PhotosW::new(payload.desc, "".parse().unwrap(), payload.url);
 
     let res = sqlx::query(
         r#"
-        UPDATE "Photos" SET ("desc", name, url)
-        = ($2, $3, $4) WHERE id = $1
+        UPDATE "Photos" SET ("desc", url)
+        = ($2, $3) WHERE id = $1
         "#,
     )
         .bind(id)
         .bind(&photo.desc)
-        .bind(&photo.name)
         .bind(&photo.url)
         .execute(&pool)
         .await;
 
     match res {
         Ok(result) => {
-            let rows = result.rows_affected();
-            Ok(axum::Json(format!("{} row(s) affected", rows)))
-        },
-        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+            Ok(axum::Json(serde_json::json!({
+            "success": true,
+            "rows_affected": result.rows_affected()
+            })))
+        }
+        Err(err) => {
+            eprintln!("DB error: {:?}", err);
+
+            Err(axum::Json(serde_json::json!({
+            "success": false,
+            "error": "Database operation failed"
+        })))
+        }
     }
 }
 pub async fn put_deals(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(id): extract::Path<i32>,
     axum::Json(payload): axum::Json<DealsW>,
-) -> Result<axum::Json<String>, http::StatusCode> {
-
-
-    let deal = DealsW::new(payload.date, payload.shopId, payload.enddate, payload.value, payload.text, payload.priority);
+) -> Result<axum::Json<serde_json::Value>, axum::Json<serde_json::Value>> {
+    let deal = DealsW::new(payload.date, payload.shopId, payload.enddate, payload.value, payload.r#type, payload.text, payload.priority);
 
     let res = sqlx::query(
         r#"
@@ -474,34 +501,50 @@ pub async fn put_deals(
 
     match res {
         Ok(result) => {
-            let rows = result.rows_affected();
-            Ok(axum::Json(format!("{} row(s) affected", rows)))
-        },
-        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
-    }
+            Ok(axum::Json(serde_json::json!({
+            "success": true,
+            "rows_affected": result.rows_affected()
+            })))
+        }
+        Err(err) => {
+            eprintln!("DB error: {:?}", err);
 
+            Err(axum::Json(serde_json::json!({
+            "success": false,
+            "error": "Database operation failed"
+        })))
+        }
+    }
 }
 
-
-pub async fn delete_deals(
+    pub async fn delete_deals(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(id): extract::Path<i32>,
-) -> Result<axum::Json<String>, http::StatusCode> {
-
+) -> Result<axum::Json<serde_json::Value>, axum::Json<serde_json::Value>> {
     let res = sqlx::query(
         r#"
-        DELETE FROM "Deals" WHERE id = $1
-        "#,
+    DELETE FROM "Deals" WHERE id = $1
+    "#,
     )
         .bind(id)
         .execute(&pool)
         .await;
 
+
     match res {
         Ok(result) => {
-            let rows = result.rows_affected();
-            Ok(axum::Json(format!("{} row(s) affected", rows)))
-        },
-        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+            Ok(axum::Json(serde_json::json!({
+            "success": true,
+            "rows_affected": result.rows_affected()
+            })))
+        }
+        Err(err) => {
+            eprintln!("DB error: {:?}", err);
+
+            Err(axum::Json(serde_json::json!({
+            "success": false,
+            "error": "Database operation failed"
+        })))
+        }
     }
 }
