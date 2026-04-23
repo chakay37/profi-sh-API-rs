@@ -1,10 +1,12 @@
 mod handlers;
+mod apikey;
 
 use std::collections::HashMap;
 use axum::routing::{Router, delete, get, post, put};
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::sync::{Arc, Mutex};
+use axum::middleware;
 use dotenvy::dotenv;
 use sqlx::PgPool;
 use tower_http::cors::{Any, CorsLayer};
@@ -46,7 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/photos/{id}", put(handlers::put_photos))
         .route("/deals/{id}", put(handlers::put_deals))
         .route("/deals/{id}", delete(handlers::delete_deals))
-
+        .route_layer(middleware::from_fn(apikey::require_api_key)) // 👈 all routes protected
+        .layer(cors)
+        .with_state(state.pool);
 /*        .route("/users_conversations/{id}", get(handlers::get_users_conversations))
         .route("/users/{id}", get(handlers::get_user_by_id))
         .route("/users/name={username}", get(handlers::get_user_by_username))
@@ -62,8 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/get_friendrequests_debug", get(handlers::get_friendrequests_DEBUG))
         .route("/get_messages_debug", get(handlers::get_messages_DEBUG))
 */
-        .layer(cors)
-        .with_state(state.pool);
+
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
